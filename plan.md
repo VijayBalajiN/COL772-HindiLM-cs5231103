@@ -1,4 +1,4 @@
-Deadline on 10th = Tuesday
+Deadline on 10th -- Tuesday
 
 Should have completed the coding by sunday/monday afternoon at max -- after that keep for debugging
 
