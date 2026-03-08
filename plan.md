@@ -11,3 +11,10 @@ Friday -- Start coding -- make template code with fillups to be done later -- de
 Saturday -- Make considerable progress in the work -- determine more precisely later
 
 Sunday -- Try to complete the work -- determine more precisely later
+
+
+
+----
+
+
+UPD:(Sunday) made a plan to code on the last day and today. will try to complete teh coding by tongiht and debuggin tmrw
