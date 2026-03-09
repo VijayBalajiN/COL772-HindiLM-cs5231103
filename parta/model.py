@@ -25,7 +25,7 @@ class LanguageModel(nn.Module):
         super().__init__()
         #initialize the weights with None
         #emdeddings
-        self.W_vocab = None
+        self.W_vocab = [None for _ in range(self.vocab_size)]
         self.W_devocab = None
         #attention
         self.W_Q_l_k = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
@@ -143,7 +143,7 @@ class LanguageModel(nn.Module):
             - A tensor of shape (batch_size, sequence_len, vocab_size) containing the logits for each token in the vocabulary.
             Logits are the raw, unnormalized scores output by the model, which can be converted to probabilities using a softmax function.
         """
-        self.encode()   # this function finds the word embeddings and the positional embeddings
+        self.encode(input_ids, attention_mask)   # this function finds the word embeddings and the positional embeddings
         self.n_transformer_blocks()     # this function runs a for loop for n transformer blocks, and update the hidden states in each block
         self.final_norm()       # this function applies the final layer norm
         self.devocab()          # converts the final hidden states to logits over the vocabulary
@@ -151,9 +151,10 @@ class LanguageModel(nn.Module):
         return self.logits
         # raise NotImplementedError("Implement forward as described in assignment document")
         
-    def encode(self):
-        self.apply_word_embeddings()
-        self.apply_positional_embeddings()
+    def encode(self, input_ids, attention_mask):
+        self.apply_word_embeddings(input_ids, attention_mask)
+        self.apply_positional_embeddings(attention_mask)
+        self.x_l = self.word_embeddings
         pass
     
     def n_transformer_blocks(self):
@@ -162,46 +163,103 @@ class LanguageModel(nn.Module):
         pass
     
     def final_norm(self):
+        beta = self.final_beta
+        gamma = self.final_gamma
+        self.x_l = self.layer_norm(self.x_l, beta, gamma)
         pass
     
     def devocab(self):
+        # self.x_l is of shape (batch_size, sequence_len, d_model)
+        # self.W_devocab is of shape (d_model, vocab_size)
+        self.logits = torch.matmul(self.x_l, self.W_devocab) #projected on to vocab space
         pass
     
     def find_prob(self):
+        self.probs = torch.softmax(self.logits, axis=-1)
         pass
     
-    def apply_word_embeddings(self):
+    def apply_word_embeddings(self, input_ids, attention_mask):
+        # input_ids is of shape (batch_size, sequence_len)
+        # attention_mask is of shape (batch_size, sequence_len)
+        self.word_embeddings = self.W_vocab[input_ids] #dim will be (batch_size, sequence_len, d_model)
+        self.L = input_ids.shape[1]
+        # attn_mask_exp = attention_mask.unsqueeze(-1)
+        # self.word_embeddings = self.word_embeddings * attn_mask_exp
+        # self.L = self.word_embeddings.shape[1] # sequence length
         pass
     
-    def apply_positional_embeddings(self):
+    def apply_positional_embeddings(self, attention_mask):
+        # self.word_embeddings is of shape (batch_size, sequence_len, d_model)
+        # attention_mask is of shape (batch_size, sequence_len)
+        # batch_size, sequence_len, d_model = self.word_embeddings.shape
+        # pos_range = torch.arange(sequence_len).unsqueeze(0).expand(batch_size, -1).unsqueeze(-1) # shape (batch_size, sequence_len, 1)
+        # i_range = torch.arange(d_model).unsqueeze(0).unsqueeze(0).expand(batch_size, 1, -1) # shape (batch_size, 1, d_model)
+        # # entire_range = pos_range + i_range
+        # position_embeddings = self.comp_pos_emb(pos_range, i_range) # shape (batch_size, sequence_len, d_model)
+        # position_embeddings = torch.zeros_like(self.word_embeddings) # shape (batch_size, sequence_len, d_model)
+        # for i in range(d_model):
+        #     position_embeddings[:,:,i] = self.comp_pos_emb(position_ids, i)
+        pos_range = torch.arange(self.L).view(1, -1, 1)
+        i_range = torch.arange(self.d_model).view(1, 1, -1)
+        pos_emb = self.comp_pos_emb(pos_range, i_range)
+        self.word_embeddings = self.word_embeddings + pos_emb
+        attn_mask_exp = attention_mask.unsqueeze(-1)
+        self.word_embeddings = self.word_embeddings * attn_mask_exp
         pass
+    def comp_pos_emb(self, position, i):
+        # if i % 2 == 0:
+        #     return torch.sin(position / (10000 ** (i / self.d_model)))
+        # else:
+        #     return torch.cos(position / (10000 ** ((i-1) / self.d_model)))
+        denom = torch.pow(10000, ((i//2)*2) / self.d_model)
+        sin = torch.sin(position / denom)
+        cos = torch.cos(position / denom)
+        return torch.where(i % 2 == 0, sin, cos)
+    
     
     def apply_transformer_block(self, l):
         self.apply_layer_norm(l, 1)
         self.apply_attention(l)
-        self.add()
+        self.add(1)
         self.apply_layer_norm(l, 2)
         self.apply_up_proj(l)
         self.apply_gelu()
         self.apply_down_proj(l)
-        self.add()
+        self.add(2)
         
     def apply_layer_norm(self, l, part):
+        # beta = self.f"beta_l_{part}"[l]
+        if part == 1:
+            beta = self.beta_l_1[l]
+            gamma = self.gamma_l_1[l]
+            self.z_l_1 = self.layer_norm(self.x_l, beta, gamma)
+        else:
+            beta = self.beta_l_2[l]
+            gamma = self.gamma_l_2[l]
+            self.z_l_2 = self.layer_norm(self.x_l, beta, gamma)
+                 
         pass
     
     # def apply_attention(self, l):
     #     pass
     
-    def add(self):
+    def add(self, part):
+        if part == 1:
+            self.x_l = self.x_l + self.z_l_1
+        else:
+            self.x_l = self.x_l + self.z_l_2
         pass
     
     def apply_up_proj(self, l):
+        self.z_l_2 = torch.matmul(self.z_l_2, self.W_l_up[l]) + self.b_l_up[l]
         pass
     
     def apply_gelu(self):
+        self.z_l_2 = torch.nn.functional.gelu(self.z_l_2)
         pass
     
     def apply_down_proj(self, l):
+        self.z_l_2 = torch.matmul(self.z_l_2, self.W_l_down[l]) + self.b_l_down[l]
         pass
     
     def layer_norm(self, x, beta, gamma):
@@ -226,6 +284,8 @@ class LanguageModel(nn.Module):
         
         
     def split_heads(self, l):
+        #need to split self.z_l_1 into n different parts
+        #dim of self.z_l_1 is batch_size, sequence_len, d_model
         pass
     
     def compute_qkv(self, l, i):
