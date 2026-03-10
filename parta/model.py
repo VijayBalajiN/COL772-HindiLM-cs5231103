@@ -2,6 +2,14 @@ import torch
 import torch.nn as nn
 from typing import Any, Dict, List
 
+# Monkey-patch torch.load to default weights_only=False for PyTorch 2.6+ compatibility
+_original_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
+
 
 class LanguageModel(nn.Module):
     """
@@ -14,18 +22,11 @@ class LanguageModel(nn.Module):
         Build the LanguageModel based on the config.
         """
         self.config = config
-        # self.d_model = None
-        # self.n_heads = None
-        # self.d_head = None
-        # self.n_layers = None
-        # self.vocab_size = None
-        # self.mode = None
-        # self.tau = None
         self.load_config()
         super().__init__()
         #initialize the weights with None
         #emdeddings
-        self.W_vocab = [None for _ in range(self.vocab_size)]
+        self.W_vocab = None
         self.W_devocab = None
         #attention
         self.W_Q_l_k = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
@@ -54,9 +55,9 @@ class LanguageModel(nn.Module):
         self.L = None
         
         #n_transformer_blocks
-        self.x_l = torch.zeros(self.L, self.d_model) # empty tensor of shape (self.L, self.d_model)
-        self.z_l_1 = torch.zeros(self.L, self.d_model)
-        self.z_l_2 = torch.zeros(self.L, self.d_model)
+        self.x_l = None # will be initialized in forward when L is known
+        self.z_l_1 = None
+        self.z_l_2 = None
                 
         #final_norm
         #nothing is needed i think
@@ -67,20 +68,6 @@ class LanguageModel(nn.Module):
         #find_prob
         self.probs = None
         
-        #attention
-        self.n_heads_splitted = [None for _ in range(self.n_layers+1)] # this will be a list of length n_layers+1
-        self.Q_l_n = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
-        self.K_l_n = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
-        self.V_l_n = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
-        self.S_l_n = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
-        self.attended_values_l_n = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
-        #do i need to store all the l and n things?
-        self.Q = None
-        self.K = None
-        self.V = None
-        self.S = None
-        self.attended_values = None
-        self.concatenated_attended_values = None
         
         
     def load_config(self):
@@ -90,7 +77,7 @@ class LanguageModel(nn.Module):
         self.n_layers = self.config["n_layers"]
         self.vocab_size = self.config["vocab_size"]
         self.mode = self.config["mode"]
-        self.tau = self.config["tau"]
+        self.tau = self.config.get("tau", None)
 
     def set_weights(self, weights: Dict[str, Any]):
         """
@@ -102,8 +89,8 @@ class LanguageModel(nn.Module):
             - weights: A dictionary containing the model's weights. The structure of this dictionary will depend on how you design your model.
         """
         # embeddigns
-        self.W_vocab = weights["W_vocab"]
-        self.W_devocab = weights["W_devocab"]
+        self.W_vocab = weights["W_vocab"].T  # transpose from (d_model, vocab_size) to (vocab_size, d_model)
+        self.W_devocab = weights["W_devocab"]  # shape (d_model, vocab_size) — correct for matmul
         
         #attention
         for l in range(1, self.n_layers+1):
@@ -126,8 +113,8 @@ class LanguageModel(nn.Module):
             self.gamma_l_1[l] = weights[f"gamma_{l}_1"]
             self.beta_l_2[l] = weights[f"beta_{l}_2"]
             self.gamma_l_2[l] = weights[f"gamma_{l}_2"]
-        self.final_beta = weights["final_beta"]
-        self.final_gamma = weights["final_gamma"]
+        self.final_beta = weights["beta_final"]
+        self.final_gamma = weights["gamma_final"]
         
         # raise NotImplementedError("Implement set_weights as described in assignment document")
 
@@ -155,6 +142,7 @@ class LanguageModel(nn.Module):
         self.apply_word_embeddings(input_ids, attention_mask)
         self.apply_positional_embeddings(attention_mask)
         self.x_l = self.word_embeddings
+        self.attention_mask = attention_mask
         pass
     
     def n_transformer_blocks(self):
@@ -175,7 +163,7 @@ class LanguageModel(nn.Module):
         pass
     
     def find_prob(self):
-        self.probs = torch.softmax(self.logits, axis=-1)
+        self.probs = torch.softmax(self.logits, dim=-1)
         pass
     
     def apply_word_embeddings(self, input_ids, attention_mask):
@@ -183,35 +171,20 @@ class LanguageModel(nn.Module):
         # attention_mask is of shape (batch_size, sequence_len)
         self.word_embeddings = self.W_vocab[input_ids] #dim will be (batch_size, sequence_len, d_model)
         self.L = input_ids.shape[1]
-        # attn_mask_exp = attention_mask.unsqueeze(-1)
-        # self.word_embeddings = self.word_embeddings * attn_mask_exp
-        # self.L = self.word_embeddings.shape[1] # sequence length
         pass
     
     def apply_positional_embeddings(self, attention_mask):
         # self.word_embeddings is of shape (batch_size, sequence_len, d_model)
         # attention_mask is of shape (batch_size, sequence_len)
-        # batch_size, sequence_len, d_model = self.word_embeddings.shape
-        # pos_range = torch.arange(sequence_len).unsqueeze(0).expand(batch_size, -1).unsqueeze(-1) # shape (batch_size, sequence_len, 1)
-        # i_range = torch.arange(d_model).unsqueeze(0).unsqueeze(0).expand(batch_size, 1, -1) # shape (batch_size, 1, d_model)
-        # # entire_range = pos_range + i_range
-        # position_embeddings = self.comp_pos_emb(pos_range, i_range) # shape (batch_size, sequence_len, d_model)
-        # position_embeddings = torch.zeros_like(self.word_embeddings) # shape (batch_size, sequence_len, d_model)
-        # for i in range(d_model):
-        #     position_embeddings[:,:,i] = self.comp_pos_emb(position_ids, i)
-        pos_range = torch.arange(self.L).view(1, -1, 1)
-        i_range = torch.arange(self.d_model).view(1, 1, -1)
+        pos_range = torch.arange(self.L, device=self.word_embeddings.device).view(1, -1, 1)
+        i_range = torch.arange(self.d_model, device=self.word_embeddings.device).view(1, 1, -1)
         pos_emb = self.comp_pos_emb(pos_range, i_range)
         self.word_embeddings = self.word_embeddings + pos_emb
-        attn_mask_exp = attention_mask.unsqueeze(-1)
-        self.word_embeddings = self.word_embeddings * attn_mask_exp
+        # attn_mask_exp = attention_mask.unsqueeze(-1)
+        self.word_embeddings = self.word_embeddings 
         pass
     def comp_pos_emb(self, position, i):
-        # if i % 2 == 0:
-        #     return torch.sin(position / (10000 ** (i / self.d_model)))
-        # else:
-        #     return torch.cos(position / (10000 ** ((i-1) / self.d_model)))
-        denom = torch.pow(10000, ((i//2)*2) / self.d_model)
+        denom = torch.pow(10000.0, ((i//2)*2) / self.d_model)
         sin = torch.sin(position / denom)
         cos = torch.cos(position / denom)
         return torch.where(i % 2 == 0, sin, cos)
@@ -228,7 +201,6 @@ class LanguageModel(nn.Module):
         self.add(2)
         
     def apply_layer_norm(self, l, part):
-        # beta = self.f"beta_l_{part}"[l]
         if part == 1:
             beta = self.beta_l_1[l]
             gamma = self.gamma_l_1[l]
@@ -240,8 +212,7 @@ class LanguageModel(nn.Module):
                  
         pass
     
-    # def apply_attention(self, l):
-    #     pass
+    
     
     def add(self, part):
         if part == 1:
@@ -265,49 +236,90 @@ class LanguageModel(nn.Module):
     def layer_norm(self, x, beta, gamma):
         #normalize x
         x = x - x.mean(dim=-1, keepdim=True)
-        x = x / (x.std(dim=-1, keepdim=True) + 1e-5)
+        x = x / (torch.sqrt(x.var(dim=-1, keepdim=True, correction=0) + 1e-5))
         #scale and shift
         x = gamma * x + beta
         return x
     
     def apply_attention(self, l):
-        self.n_heads_splitted = self.split_heads(l)
-        for i in range(1, self.n_heads+1):
-            self.compute_qkv(l, i)
-            self.compute_unnormalized_attention(l,i)
-            if self.mode == "tanh-clipped":
-                self.clip_attention_scores(l, i)
-            self.compute_attention_weights(l, i)
-            self.compute_attended_values(l, i)
-        self.concatenate_heads(l)
-        self.project_attention_output(l) #should convert the output to self.z_l_1
+        # self.n_heads_splitted = self.split_heads(l)
+        # for i in range(1, self.n_heads+1):
+        #     self.compute_qkv(l, i)
+        #     self.compute_unnormalized_attention(l,i)
+        #     if self.mode == "tanh-clipped":
+        #         self.clip_attention_scores(l, i)
+        #     self.compute_attention_weights(l, i)
+        #     self.compute_attended_values(l, i)
+        # self.concatenate_heads(l)
+        # self.project_attention_output(l) #should convert the output to self.z_l_1
+        
+        W_Q_l = torch.cat([w for w in self.W_Q_l_k[l][1:self.n_heads+1]], dim=0)
+        W_K_l = torch.cat([w for w in self.W_K_l_k[l][1:self.n_heads+1]], dim=0)
+        W_V_l = torch.cat([w for w in self.W_V_l_k[l][1:self.n_heads+1]], dim=0)
+        Q = torch.matmul(self.z_l_1, W_Q_l)
+        K = torch.matmul(self.z_l_1, W_K_l)
+        V = torch.matmul(self.z_l_1, W_V_l)
+        print(f"Shape of Q: {Q.shape}, Shape of K: {K.shape}, Shape of V: {V.shape}")
+        
+        #changing hte shape
+        batch_size, sequence_len, d_model = self.z_l_1.shape
+        Q = Q.view(batch_size, sequence_len, self.n_heads, self.d_head)
+        K = K.view(batch_size, sequence_len, self.n_heads, self.d_head)
+        V = V.view(batch_size, sequence_len, self.n_heads, self.d_head)
+        Q = Q.transpose(1, 2)
+        K = K.transpose(1, 2)
+        V = V.transpose(1, 2)
+        
+        #attention
+        S = torch.matmul(Q, K.transpose(-2, -1)) / (self.d_head ** 0.5)
+        if self.mode == "tanh-clipped":
+            S = self.tau * torch.tanh(S)
+        # Causal mask (lower-triangular keep): mask strictly upper triangle (future tokens).
+        # causal_mask = torch.triu(torch.ones(sequence_len, sequence_len, device=S.device), diagonal=1).bool()
+        # S = S.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
+        causal_mask = torch.triu(torch.full((sequence_len, sequence_len), float('-inf'), device=S.device), diagonal=1)
+        S = S + causal_mask.unsqueeze(0).unsqueeze(0)
+        padding_mask = (self.attention_mask == 0).unsqueeze(1).unsqueeze(2)  # shape (batch_size, 1, 1, sequence_len)
+        S = S.masked_fill(padding_mask, float('-inf'))
+        attn_wts = torch.softmax(S, dim=-1)
+        attn_wts = torch.nan_to_num(attn_wts, nan=0.0)
+        attended_values = torch.matmul(attn_wts, V)
+        #concat heads
+        attended_values = attended_values.transpose(1, 2)
+        attended_values = attended_values.contiguous()
+        attended_values = attended_values.view(batch_size, sequence_len, self.n_heads * self.d_head)
+        
+        #final projection
+        self.z_l_1 = torch.matmul(attended_values, self.W_O_l[l])
+        print(f"Shape of attention output (z_l_1): {self.z_l_1.shape}, Shape of W_O_l: {self.W_O_l[l].shape}")
         
         
-    def split_heads(self, l):
-        #need to split self.z_l_1 into n different parts
-        #dim of self.z_l_1 is batch_size, sequence_len, d_model
-        pass
+
+    # def split_heads(self, l):
+    #     #need to split self.z_l_1 into n different parts
+    #     #dim of self.z_l_1 is batch_size, sequence_len, d_model
+    #     pass
     
-    def compute_qkv(self, l, i):
-        pass
+    # def compute_qkv(self, l, i):
+    #     pass
     
-    def compute_unnormalized_attention(self, l, i):
-        pass
+    # def compute_unnormalized_attention(self, l, i):
+    #     pass
     
-    def clip_attention_scores(self, l, i):
-        pass
+    # def clip_attention_scores(self, l, i):
+    #     pass
     
-    def compute_attention_weights(self, l, i):
-        pass
+    # def compute_attention_weights(self, l, i):
+    #     pass
     
-    def compute_attended_values(self, l, i):
-        pass
+    # def compute_attended_values(self, l, i):
+    #     pass
     
-    def concatenate_heads(self, l):
-        pass
+    # def concatenate_heads(self, l):
+    #     pass
     
-    def project_attention_output(self, l):
-        pass
+    # def project_attention_output(self, l):
+    #     pass
     
         
         
@@ -334,4 +346,22 @@ def collate_fn(batch: Dict[str, List[torch.tensor]]) -> Dict[str, torch.Tensor]:
     Ensure that the function takes in a batch of data and outputs a dictionary of tensors ready to be fed into the model.
     """
     PAD_ID = 0  # Assume 0 is the padding token ID
-    raise NotImplementedError("Implement collate_fn as described in assignment document")
+    max_len = 0
+    input_ids = batch['input_ids']
+    for ids in input_ids:
+        max_len = max(max_len, len(ids))     #vectorize?
+    padded_batch = {}       #padd
+    padded_batch['input_ids'] = []
+    padded_batch['attention_mask'] = []
+    for ids in input_ids:
+        padded_ids = ids.tolist() + [PAD_ID] * (max_len - len(ids))
+        attention_mask = [1] * len(ids) + [0] * (max_len - len(ids))
+        padded_batch['input_ids'].append(torch.tensor(padded_ids))
+        padded_batch['attention_mask'].append(torch.tensor(attention_mask))
+    padded_batch['input_ids'] = torch.stack(padded_batch['input_ids'])
+    padded_batch['attention_mask'] = torch.stack(padded_batch['attention_mask'])
+    return padded_batch
+    # raise NotImplementedError("Implement collate_fn as described in assignment document")
+
+
+
