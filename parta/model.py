@@ -315,20 +315,22 @@ def collate_fn(batch: Dict[str, List[torch.tensor]]) -> Dict[str, torch.Tensor]:
     Ensure that the function takes in a batch of data and outputs a dictionary of tensors ready to be fed into the model.
     """
     PAD_ID = 0  # Assume 0 is the padding token ID
-    max_len = 0
+    # max_len = 0
     input_ids = batch['input_ids']
-    for ids in input_ids:
-        max_len = max(max_len, len(ids))     #vectorize?
+    # for ids in input_ids:
+    #     max_len = max(max_len, len(ids))     #vectorize?
     padded_batch = {}       #padd
-    padded_batch['input_ids'] = []
-    padded_batch['attention_mask'] = []
-    for ids in input_ids:
-        padded_ids = ids.tolist() + [PAD_ID] * (max_len - len(ids))
-        attention_mask = [1] * len(ids) + [0] * (max_len - len(ids))
-        padded_batch['input_ids'].append(torch.tensor(padded_ids))
-        padded_batch['attention_mask'].append(torch.tensor(attention_mask))
-    padded_batch['input_ids'] = torch.stack(padded_batch['input_ids'])
-    padded_batch['attention_mask'] = torch.stack(padded_batch['attention_mask'])
+    # padded_batch['input_ids'] = []
+    # padded_batch['attention_mask'] = []
+    # for ids in input_ids:
+    #     padded_ids = ids.tolist() + [PAD_ID] * (max_len - len(ids))
+    #     attention_mask = [1] * len(ids) + [0] * (max_len - len(ids))
+    #     padded_batch['input_ids'].append(torch.tensor(padded_ids))
+    #     padded_batch['attention_mask'].append(torch.tensor(attention_mask))
+    # padded_batch['input_ids'] = torch.stack(padded_batch['input_ids'])
+    # padded_batch['attention_mask'] = torch.stack(padded_batch['attention_mask'])
+    padded_batch['input_ids'] = torch.nn.utils.rnn.pad_sequence(input_ids, batch_first=True, padding_value=PAD_ID)
+    padded_batch['attention_mask'] = (padded_batch['input_ids'] != PAD_ID).long()
     return padded_batch
     # raise NotImplementedError("Implement collate_fn as described in assignment document")
 
