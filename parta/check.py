@@ -37,6 +37,8 @@ def run_model(model: nn.Module, input_ids: List[torch.Tensor], vocab_size: int) 
     """
     if torch.cuda.is_available():
         device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
     else:
         device = torch.device("cpu")
     model.eval()

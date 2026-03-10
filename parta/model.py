@@ -10,6 +10,13 @@ def _patched_torch_load(*args, **kwargs):
     return _original_torch_load(*args, **kwargs)
 torch.load = _patched_torch_load
 
+def _get_device():
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        return torch.device('mps')
+    else:
+        return torch.device('cpu')
 
 class LanguageModel(nn.Module):
     """
@@ -24,48 +31,15 @@ class LanguageModel(nn.Module):
         self.config = config
         self.load_config()
         super().__init__()
-        #initialize the weights with None
-        #emdeddings
-        self.W_vocab = None
-        self.W_devocab = None
-        #attention
-        self.W_Q_l_k = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
-        self.W_K_l_k = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
-        self.W_V_l_k = [[None for _ in range(self.n_heads+1)] for _ in range(self.n_layers+1)]
-        self.W_O_l = [None for _ in range(self.n_layers+1)]
-        
-        # feedforward
-        self.W_l_up = [None for _ in range(self.n_layers+1)]
-        self.b_l_up = [None for _ in range(self.n_layers+1)]
-        self.W_l_down = [None for _ in range(self.n_layers+1)]
-        self.b_l_down = [None for _ in range(self.n_layers+1)]
-        
-        # layer norms
-        self.beta_l_1 = [None for _ in range(self.n_layers+1)]
-        self.gamma_l_1 = [None for _ in range(self.n_layers+1)]
-        self.beta_l_2 = [None for _ in range(self.n_layers+1)]
-        self.gamma_l_2 = [None for _ in range(self.n_layers+1)]
-        self.final_beta = None
-        self.final_gamma = None
-        
-        
-        #initializing the hidden states needed in different function in forward pass to none
-        #encode
-        self.word_embeddings = None #initially will contain the word embeddigs alone then will add positional to it
+        #will initialize the weights with hardcoded names in the set_weights func via register buffers -> need to change this if i want to be able to train the model
+        self.word_embeddings = None
         self.L = None
         
         #n_transformer_blocks
         self.x_l = None # will be initialized in forward when L is known
         self.z_l_1 = None
         self.z_l_2 = None
-                
-        #final_norm
-        #nothing is needed i think
-        
-        #devocab
         self.logits = None
-        
-        #find_prob
         self.probs = None
         
         
@@ -88,35 +62,33 @@ class LanguageModel(nn.Module):
         Parameters:
             - weights: A dictionary containing the model's weights. The structure of this dictionary will depend on how you design your model.
         """
-        # embeddigns
-        self.W_vocab = weights["W_vocab"].T  # transpose from (d_model, vocab_size) to (vocab_size, d_model)
-        self.W_devocab = weights["W_devocab"]  # shape (d_model, vocab_size) — correct for matmul
+        # Embeddings
+        self.register_buffer('W_vocab', weights["W_vocab"].T)      # (vocab_size, d_model)
+        self.register_buffer('W_devocab', weights["W_devocab"])    # (d_model, vocab_size)
         
-        #attention
-        for l in range(1, self.n_layers+1):
-            for k in range(1, self.n_heads+1):
-                self.W_Q_l_k[l][k] = weights[f"W_{l}_Q_{k}"]
-                self.W_K_l_k[l][k] = weights[f"W_{l}_K_{k}"]
-                self.W_V_l_k[l][k] = weights[f"W_{l}_V_{k}"]
-            self.W_O_l[l] = weights[f"W_{l}_O"]
+        # Per-layer weights
+        for l in range(1, self.n_layers + 1):
+            # Attention: Q, K, V per head + output projection
+            for k in range(1, self.n_heads + 1):
+                self.register_buffer(f'W_{l}_Q_{k}', weights[f"W_{l}_Q_{k}"])
+                self.register_buffer(f'W_{l}_K_{k}', weights[f"W_{l}_K_{k}"])
+                self.register_buffer(f'W_{l}_V_{k}', weights[f"W_{l}_V_{k}"])
+            self.register_buffer(f'W_{l}_O', weights[f"W_{l}_O"])
             
-        #feedfrward
-        for l in range(1, self.n_layers+1):
-            self.W_l_up[l] = weights[f"W_{l}_up"]
-            self.b_l_up[l] = weights[f"b_{l}_up"]
-            self.W_l_down[l] = weights[f"W_{l}_down"]
-            self.b_l_down[l] = weights[f"b_{l}_down"]
+            # Feedforward
+            self.register_buffer(f'W_{l}_up', weights[f"W_{l}_up"])
+            self.register_buffer(f'b_{l}_up', weights[f"b_{l}_up"])
+            self.register_buffer(f'W_{l}_down', weights[f"W_{l}_down"])
+            self.register_buffer(f'b_{l}_down', weights[f"b_{l}_down"])
             
-        # layer norms
-        for l in range(1, self.n_layers+1):
-            self.beta_l_1[l] = weights[f"beta_{l}_1"]
-            self.gamma_l_1[l] = weights[f"gamma_{l}_1"]
-            self.beta_l_2[l] = weights[f"beta_{l}_2"]
-            self.gamma_l_2[l] = weights[f"gamma_{l}_2"]
-        self.final_beta = weights["beta_final"]
-        self.final_gamma = weights["gamma_final"]
+            # Layer norms
+            self.register_buffer(f'beta_{l}_1', weights[f"beta_{l}_1"])
+            self.register_buffer(f'gamma_{l}_1', weights[f"gamma_{l}_1"])
+            self.register_buffer(f'beta_{l}_2', weights[f"beta_{l}_2"])
+            self.register_buffer(f'gamma_{l}_2', weights[f"gamma_{l}_2"])
         
-        # raise NotImplementedError("Implement set_weights as described in assignment document")
+        self.register_buffer('beta_final', weights["beta_final"])
+        self.register_buffer('gamma_final', weights["gamma_final"])
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """
@@ -151,10 +123,7 @@ class LanguageModel(nn.Module):
         pass
     
     def final_norm(self):
-        beta = self.final_beta
-        gamma = self.final_gamma
-        self.x_l = self.layer_norm(self.x_l, beta, gamma)
-        pass
+        self.x_l = self.layer_norm(self.x_l, self.beta_final, self.gamma_final)
     
     def devocab(self):
         # self.x_l is of shape (batch_size, sequence_len, d_model)
@@ -202,12 +171,12 @@ class LanguageModel(nn.Module):
         
     def apply_layer_norm(self, l, part):
         if part == 1:
-            beta = self.beta_l_1[l]
-            gamma = self.gamma_l_1[l]
+            beta = getattr(self, f'beta_{l}_1')
+            gamma = getattr(self, f'gamma_{l}_1')
             self.z_l_1 = self.layer_norm(self.x_l, beta, gamma)
         else:
-            beta = self.beta_l_2[l]
-            gamma = self.gamma_l_2[l]
+            beta = getattr(self, f'beta_{l}_2')
+            gamma = getattr(self, f'gamma_{l}_2')
             self.z_l_2 = self.layer_norm(self.x_l, beta, gamma)
                  
         pass
@@ -222,7 +191,7 @@ class LanguageModel(nn.Module):
         pass
     
     def apply_up_proj(self, l):
-        self.z_l_2 = torch.matmul(self.z_l_2, self.W_l_up[l]) + self.b_l_up[l]
+        self.z_l_2 = torch.matmul(self.z_l_2, getattr(self, f'W_{l}_up')) + getattr(self, f'b_{l}_up')
         pass
     
     def apply_gelu(self):
@@ -230,7 +199,7 @@ class LanguageModel(nn.Module):
         pass
     
     def apply_down_proj(self, l):
-        self.z_l_2 = torch.matmul(self.z_l_2, self.W_l_down[l]) + self.b_l_down[l]
+        self.z_l_2 = torch.matmul(self.z_l_2, getattr(self, f'W_{l}_down')) + getattr(self, f'b_{l}_down')
         pass
     
     def layer_norm(self, x, beta, gamma):
@@ -253,13 +222,13 @@ class LanguageModel(nn.Module):
         # self.concatenate_heads(l)
         # self.project_attention_output(l) #should convert the output to self.z_l_1
         
-        W_Q_l = torch.cat([w for w in self.W_Q_l_k[l][1:self.n_heads+1]], dim=0)
-        W_K_l = torch.cat([w for w in self.W_K_l_k[l][1:self.n_heads+1]], dim=0)
-        W_V_l = torch.cat([w for w in self.W_V_l_k[l][1:self.n_heads+1]], dim=0)
+        W_Q_l = torch.cat([getattr(self, f'W_{l}_Q_{k}') for k in range(1, self.n_heads+1)], dim=0)
+        W_K_l = torch.cat([getattr(self, f'W_{l}_K_{k}') for k in range(1, self.n_heads+1)], dim=0)
+        W_V_l = torch.cat([getattr(self, f'W_{l}_V_{k}') for k in range(1, self.n_heads+1)], dim=0)
         Q = torch.matmul(self.z_l_1, W_Q_l)
         K = torch.matmul(self.z_l_1, W_K_l)
         V = torch.matmul(self.z_l_1, W_V_l)
-        print(f"Shape of Q: {Q.shape}, Shape of K: {K.shape}, Shape of V: {V.shape}")
+        # print(f"Shape of Q: {Q.shape}, Shape of K: {K.shape}, Shape of V: {V.shape}")
         
         #changing hte shape
         batch_size, sequence_len, d_model = self.z_l_1.shape
@@ -290,8 +259,8 @@ class LanguageModel(nn.Module):
         attended_values = attended_values.view(batch_size, sequence_len, self.n_heads * self.d_head)
         
         #final projection
-        self.z_l_1 = torch.matmul(attended_values, self.W_O_l[l])
-        print(f"Shape of attention output (z_l_1): {self.z_l_1.shape}, Shape of W_O_l: {self.W_O_l[l].shape}")
+        self.z_l_1 = torch.matmul(attended_values, getattr(self, f'W_{l}_O'))
+        # print(f"Shape of attention output (z_l_1): {self.z_l_1.shape}, Shape of W_O_l: {getattr(self, f'W_{l}_O').shape}")
         
         
 
