@@ -73,6 +73,12 @@ class BPETokenizer:
             bigram_corpus.extend([(sentence[i-1],sentence[i]) for i in range(1, len(sentence))])
             sent_vocab = set(sentence)
             vocab.update(sent_vocab)
+        #have a doubly linked list of the corpus and then merge the pairs in the corpus and then update the
+        #merge frequencies appropriately
+        DLlist = DLinkedList()
+        for char in str_corpus:
+            DLlist.append(char)
+
         merged_pairs = {}
         for bigram in bigram_corpus:
             merged_pairs[bigram] = merged_pairs.get(bigram, 0) + 1
@@ -87,18 +93,48 @@ class BPETokenizer:
             bigram = "".join(bigram_sep)
             vocab.add(bigram)
             merge_rules.append(bigram_sep)
-            for token in vocab:
-                word1 = token + bigram
-                word2 = bigram + token
-                # freq1, freq2 = find_freq(str_corpus, word1, word2) #to be implemented
-                freq1 = find_freq(str_corpus, word1)
-                freq2 = find_freq(str_corpus, word2)
-                if freq1 > 0:
-                    # merged_pairs_heap.heappush((-freq1,(token, bigram)))
-                    heappush(merged_pairs_heap, (-freq1,(token, bigram)))
-                if freq2 > 0:
-                    # merged_pairs_heap.heappush((-freq2, (bigram, token)))
-                    heappush(merged_pairs_heap, (-freq2,(bigram, token)))
+            new_freq = {}
+            node = DLlist.head
+            while node!=DLlist.tail and node != None:
+                if node.data == bigram_sep[0] and node.next != None and node.next.data == bigram_sep[1]:
+                    new_node = DLlist.merge(node, merge_data)
+                    if new_node.prev != None:
+                        new_bigram1 = (new_node.prev.data, new_node.data)
+                        new_freq[new_bigram1] = new_freq.get(new_bigram1, 0) + 1
+                    if new_node.next != None:
+                        new_bigram2 = (new_node.data, new_node.next.data)
+                        new_freq[new_bigram2] = new_freq.get(new_bigram2, 0) + 1
+                    #for the removed bigrams, we need to check the previous and next nodes of the old nodes
+                    if node.prev != None:
+                        old_bigram1 = (node.prev.data, node.data)
+                        new_freq[old_bigram1] = new_freq.get(old_bigram1, 0) - 1
+                    if node.next != None and node.next.next != None:
+                        old_bigram2 = (node.next.data, node.next.next.data)
+                        new_freq[old_bigram2] = new_freq.get(old_bigram2, 0) - 1
+                    node = new_node
+                node = node.next
+                # print()
+            for bigram in new_freq.keys():
+                freq = new_freq[bigram]
+                if freq > 0:
+                    heappush(merged_pairs_heap, (-freq, bigram))
+                elif freq < 0:
+                    #find the bigram's frequency in the heap, invalidate it and then update it 
+                    # and then put it in wiht the new frequency
+                    #TODO later
+                    pass
+            # for token in vocab:
+            #     word1 = token + bigram
+            #     word2 = bigram + token
+            #     # freq1, freq2 = find_freq(str_corpus, word1, word2) #to be implemented
+            #     freq1 = find_freq(str_corpus, word1)
+            #     freq2 = find_freq(str_corpus, word2)
+            #     if freq1 > 0:
+            #         # merged_pairs_heap.heappush((-freq1,(token, bigram)))
+            #         heappush(merged_pairs_heap, (-freq1,(token, bigram)))
+            #     if freq2 > 0:
+            #         # merged_pairs_heap.heappush((-freq2, (bigram, token)))
+            #         heappush(merged_pairs_heap, (-freq2,(bigram, token)))
         self.vocab = list(vocab)
         self.merge_rules = merge_rules
         #add unknown and special things
