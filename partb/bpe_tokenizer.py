@@ -49,7 +49,7 @@ class DLinkedList:
             
 
 class BPETokenizer:
-    def __init__(self, vocab_size=1000, special_tokens=None):
+    def __init__(self, vocab_size=15000, special_tokens=None):
         # raise NotImplementedError("BPETokenizer initialization not implemented yet.")
         self.vocab_size = vocab_size
         self.unk_id = None #set it in train
@@ -84,10 +84,15 @@ class BPETokenizer:
             merged_pairs[bigram] = merged_pairs.get(bigram, 0) + 1
         merged_pairs_heap = [(-merged_pairs[bigram], bigram) for bigram in merged_pairs.keys()]
         heapify(merged_pairs_heap)
+        valid_counts = dict(merged_pairs)
         for i in range(self.vocab_size - len(vocab)):
-            try:
-                max_pair = heappop(merged_pairs_heap)
-            except:
+            max_pair = None
+            while merged_pairs_heap:
+                neg_freq, bigram = heappop(merged_pairs_heap)
+                if valid_counts.get(bigram, 0) == -neg_freq:
+                    max_pair = (neg_freq, bigram)
+                    break
+            if max_pair is None:
                 break
             bigram_sep = max_pair[1]
             bigram = "".join(bigram_sep)
@@ -114,15 +119,10 @@ class BPETokenizer:
                     node = new_node
                 node = node.next
                 # print()
-            for bigram in new_freq.keys():
-                freq = new_freq[bigram]
-                if freq > 0:
-                    heappush(merged_pairs_heap, (-freq, bigram))
-                elif freq < 0:
-                    #find the bigram's frequency in the heap, invalidate it and then update it 
-                    # and then put it in wiht the new frequency
-                    #TODO later
-                    pass
+            for bigram, delta in new_freq.items():
+                valid_counts[bigram] = valid_counts.get(bigram, 0) + delta
+                if valid_counts[bigram] > 0:
+                    heappush(merged_pairs_heap, (-valid_counts[bigram], bigram))
             # for token in vocab:
             #     word1 = token + bigram
             #     word2 = bigram + token
@@ -135,7 +135,12 @@ class BPETokenizer:
             #     if freq2 > 0:
             #         # merged_pairs_heap.heappush((-freq2, (bigram, token)))
             #         heappush(merged_pairs_heap, (-freq2,(bigram, token)))
-        self.vocab = list(vocab)
+        # self.vocab = list(vocab)
+        pad_token = "<PAD>"
+        vocab = list(vocab)
+        vocab = sorted(vocab)         # deterministic ordering
+        vocab.insert(0, pad_token)    # 0 is always padding, never a real token
+        self.vocab = vocab
         self.merge_rules = merge_rules
         #add unknown and special things
         self.vocab.append("<UNK>")
@@ -171,7 +176,7 @@ class BPETokenizer:
         for rule in self.merge_rules:
             node = DLlist.head
             while node!=DLlist.tail and node != None:
-                if rule == (node.data, node.next.data):
+                if tuple(rule) == (node.data, node.next.data):
                     node = DLlist.merge(node, merge_data)
                 node = node.next
         token_ids = []
@@ -208,7 +213,8 @@ class BPETokenizer:
     
     def get_vocab_size(self):
         # raise NotImplementedError("Get vocab size method not implemented yet.")
-        return self.vocab_size
+        # return self.vocab_size
+        return len(self.vocab)
     
     def get_unk_id(self):
         # raise NotImplementedError("Get unk id method not implemented yet.")
