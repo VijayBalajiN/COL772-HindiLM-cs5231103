@@ -101,8 +101,8 @@ class LanguageModel(nn.Module):
                 setattr(self, f'W_{l}_K_{k}', nn.Parameter(torch.empty(self.d_head, self.d_model)))
                 setattr(self, f'W_{l}_V_{k}', nn.Parameter(torch.empty(self.d_head, self.d_model)))
             setattr(self, f'W_{l}_O', nn.Parameter(torch.empty(self.d_model, self.d_model)))
-            setattr(self, f'W_{l}_up', nn.Parameter(torch.empty(self.d_model, self.d_model * 4)))
-            setattr(self, f'b_{l}_up', nn.Parameter(torch.empty(self.d_model * 4)))
+            setattr(self, f'W_{l}_up', nn.Parameter(torch.empty(self.d_model, self.d_model * 8)))
+            setattr(self, f'b_{l}_up', nn.Parameter(torch.empty(self.d_model * 8)))
             setattr(self, f'W_{l}_down', nn.Parameter(torch.empty(self.d_model * 4, self.d_model)))
             setattr(self, f'b_{l}_down', nn.Parameter(torch.empty(self.d_model)))
             setattr(self, f'beta_{l}_1', nn.Parameter(torch.empty(self.d_model)))
@@ -201,10 +201,10 @@ class LanguageModel(nn.Module):
         self.apply_layer_norm(l, 3)
         self.add(1)
         self.apply_layer_norm(l, 2)
-        self.apply_layer_norm(l, 4)
         self.apply_up_proj(l)
         self.apply_swiglu()
         self.apply_down_proj(l)
+        self.apply_layer_norm(l, 4)
         self.add(2)
         
     def apply_layer_norm(self, l, part):
@@ -241,7 +241,8 @@ class LanguageModel(nn.Module):
         pass
     
     def apply_swiglu(self):
-        self.z_l_2 = torch.nn.functional.swiglu(self.z_l_2)
+        x_1, x_2 = torch.chunk(self.z_l_2, 2, dim=-1)
+        self.z_l_2 = x_1 * torch.nn.functional.silu(x_2)
         pass
     
     def apply_down_proj(self, l):
@@ -288,6 +289,7 @@ class LanguageModel(nn.Module):
         #attention
         S = torch.matmul(Q, K.transpose(-2, -1)) / (self.d_head ** 0.5)
         if self.mode == "tanh-clipped":
+            # print("model is tanh-clipped")
             S = self.tau * torch.tanh(S)
         # Causal mask (lower-triangular keep): mask strictly upper triangle (future tokens).
         # causal_mask = torch.triu(torch.ones(sequence_len, sequence_len, device=S.device), diagonal=1).bool()
