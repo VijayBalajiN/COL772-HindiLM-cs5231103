@@ -20,6 +20,8 @@ def check_format(model, tokenizer, texts):
 
     if torch.cuda.is_available():
         device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        device = torch.device('mps')
     else:
         device = torch.device('cpu')
 
@@ -58,7 +60,7 @@ if __name__ == "__main__":
     parser.add_argument('--tokenizer_path', type=str, required=True, help='Path to the tokenizer checkpoint directory')
     args = parser.parse_args()
 
-    model, tokenizer = load_model_and_tokenizer(args.model_path, args.model_path)
+    model, tokenizer = load_model_and_tokenizer(args.model_path, args.tokenizer_path)
 
     # Example texts to check format
     texts = [

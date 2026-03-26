@@ -89,6 +89,42 @@ class LanguageModel(nn.Module):
         
         self.register_buffer('beta_final', weights["beta_final"])
         self.register_buffer('gamma_final', weights["gamma_final"])
+    
+    def set_weights_randomly(self):
+        #do now usign nn.parameters so tthat we can train
+        self.W_vocab = nn.Parameter(torch.empty(self.vocab_size, self.d_model))
+        self.W_devocab = nn.Parameter(torch.empty(self.d_model, self.vocab_size))
+        
+        for l in range(1, self.n_layers + 1):
+            for k in range(1, self.n_heads + 1):
+                setattr(self, f'W_{l}_Q_{k}', nn.Parameter(torch.empty(self.d_head, self.d_model)))
+                setattr(self, f'W_{l}_K_{k}', nn.Parameter(torch.empty(self.d_head, self.d_model)))
+                setattr(self, f'W_{l}_V_{k}', nn.Parameter(torch.empty(self.d_head, self.d_model)))
+            setattr(self, f'W_{l}_O', nn.Parameter(torch.empty(self.d_model, self.d_model)))
+            setattr(self, f'W_{l}_up', nn.Parameter(torch.empty(self.d_model, self.d_model * 4)))
+            setattr(self, f'b_{l}_up', nn.Parameter(torch.empty(self.d_model * 4)))
+            setattr(self, f'W_{l}_down', nn.Parameter(torch.empty(self.d_model * 4, self.d_model)))
+            setattr(self, f'b_{l}_down', nn.Parameter(torch.empty(self.d_model)))
+            setattr(self, f'beta_{l}_1', nn.Parameter(torch.empty(self.d_model)))
+            setattr(self, f'gamma_{l}_1', nn.Parameter(torch.empty(self.d_model)))
+            setattr(self, f'beta_{l}_2', nn.Parameter(torch.empty(self.d_model)))
+            setattr(self, f'gamma_{l}_2', nn.Parameter(torch.empty(self.d_model)))
+            setattr(self, f'beta_{l}_3', nn.Parameter(torch.empty(self.d_model)))
+            setattr(self, f'gamma_{l}_3', nn.Parameter(torch.empty(self.d_model)))
+            setattr(self, f'beta_{l}_4', nn.Parameter(torch.empty(self.d_model)))
+            setattr(self, f'gamma_{l}_4', nn.Parameter(torch.empty(self.d_model)))
+
+            
+        self.beta_final = nn.Parameter(torch.empty(self.d_model))
+        self.gamma_final = nn.Parameter(torch.empty(self.d_model))
+        # Initialize parameters (e.g., with Xavier initialization)
+        
+        # self.word_embeddings = nn.Parameter(torch.empty(self.vocab_size, self.d_model))
+        for param in self.parameters():
+            if param.dim() > 1:
+                nn.init.xavier_uniform_(param)
+            else:
+                nn.init.zeros_(param)
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """
@@ -162,10 +198,12 @@ class LanguageModel(nn.Module):
     def apply_transformer_block(self, l):
         self.apply_layer_norm(l, 1)
         self.apply_attention(l)
+        self.apply_layer_norm(l, 3)
         self.add(1)
         self.apply_layer_norm(l, 2)
+        self.apply_layer_norm(l, 4)
         self.apply_up_proj(l)
-        self.apply_gelu()
+        self.apply_swiglu()
         self.apply_down_proj(l)
         self.add(2)
         
@@ -174,10 +212,18 @@ class LanguageModel(nn.Module):
             beta = getattr(self, f'beta_{l}_1')
             gamma = getattr(self, f'gamma_{l}_1')
             self.z_l_1 = self.layer_norm(self.x_l, beta, gamma)
-        else:
+        elif part == 2:
             beta = getattr(self, f'beta_{l}_2')
             gamma = getattr(self, f'gamma_{l}_2')
             self.z_l_2 = self.layer_norm(self.x_l, beta, gamma)
+        elif part == 3:
+            beta = getattr(self, f'beta_{l}_3')
+            gamma = getattr(self, f'gamma_{l}_3')
+            self.z_l_1 = self.layer_norm(self.z_l_1, beta, gamma)
+        elif part == 4:
+            beta = getattr(self, f'beta_{l}_4')
+            gamma = getattr(self, f'gamma_{l}_4')
+            self.z_l_2 = self.layer_norm(self.z_l_2, beta, gamma)
                  
         pass
     
@@ -194,8 +240,8 @@ class LanguageModel(nn.Module):
         self.z_l_2 = torch.matmul(self.z_l_2, getattr(self, f'W_{l}_up')) + getattr(self, f'b_{l}_up')
         pass
     
-    def apply_gelu(self):
-        self.z_l_2 = torch.nn.functional.gelu(self.z_l_2)
+    def apply_swiglu(self):
+        self.z_l_2 = torch.nn.functional.swiglu(self.z_l_2)
         pass
     
     def apply_down_proj(self, l):
