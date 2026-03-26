@@ -1,6 +1,7 @@
 from partb.bpe_tokenizer import BPETokenizer
 from parta.model import LanguageModel, collate_fn
 import torch
+import os
 
 print("This script checks whether your model and tokenizer are compatible with the expected format for the assignment.")
 print("Make sure to implement the load_model_and_tokenizer function to load your trained model and tokenizer from the checkpoint directory, and ensure that your model and tokenizer are compatible with the check_format function.")
@@ -9,7 +10,30 @@ def load_model_and_tokenizer(model_path, tokenizer_path):
     """
     CHANGE THIS FUNCTION TO LOAD YOUR TRAINED MODEL AND TOKENIZER FROM THE CHECKPOINT DIRECTORY.
     """
-    raise NotImplementedError("You need to implement the load_model_and_tokenizer function to load your trained model and tokenizer from the checkpoint directory.")
+    # raise NotImplementedError("You need to implement the load_model_and_tokenizer function to load your trained model and tokenizer from the checkpoint directory.")
+    tokenizer = BPETokenizer()
+    tokenizer.load(tokenizer_path)
+    config = {
+        "vocab_size": tokenizer.get_vocab_size(),
+        "d_model": 256,
+        "n_heads": 8,
+        "d_head": 32,
+        "n_layers": 4,
+        "mode": "standard",
+        "tau": 1.5,
+        "batch_size": 32,
+        "lr": 1e-4
+    }
+    model = LanguageModel(config)
+    model.set_weights_randomly()
+    model.load_state_dict(torch.load(os.path.join(model_path, "model9.pt")))
+    device = "cpu"
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    # model.to(device)
+    return model, tokenizer
 
 
 def check_format(model, tokenizer, texts):

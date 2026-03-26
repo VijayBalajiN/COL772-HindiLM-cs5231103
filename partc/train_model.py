@@ -1,6 +1,7 @@
 import torch.nn as nn
 import torch
 import os
+import json
 # YOUR TOKENIZER AND MODEL from PART A AND PART B RESPECTIVELY
 # If you wish to change their code, please do so in their respective files under parta/ and partb/ directories.
 from partb.bpe_tokenizer import BPETokenizer
@@ -83,7 +84,7 @@ def train_loop(model, batched_tok_train, loss_fn, optim):
         optim.zero_grad()
         loss.backward()
         optim.step()
-        if (batch+1)%10 == 0:
+        if (batch+1)%40 == 0:
             bpc = calc_bpc(output_logits, collated_input['input_ids'], collated_input['attention_mask'], bpe_tokenizer)
             print("Batch:", batch+1, "Loss:", loss.item(), "BPC:", bpc)
             
@@ -106,7 +107,10 @@ def val_loop(model, batched_tok_val, loss_fn):
             total_loss += loss.item()
             total_bpc += bpc
             count += 1
-    print("Validation Loss:", total_loss/count, "Validation BPC:", total_bpc/count)
+    avg_val_loss = total_loss/count
+    avg_val_bpc = total_bpc/count
+    print("Validation Loss:", avg_val_loss, "Validation BPC:", avg_val_bpc)
+    return avg_val_loss, avg_val_bpc
         
     
 import time
@@ -126,18 +130,40 @@ def main(args):
         for line in f:
             val_texts.append(line.strip())
     print("read data in", time.time() - start_time, "seconds")
-    tokenized_train = [bpe_tokenizer.encode(text) for text in train_texts]
-    tokenized_val = [bpe_tokenizer.encode(text) for text in val_texts]
+
+    train_cache_path = os.path.join(os.path.dirname(os.path.abspath(args.train_path)), "encoded_train.json")
+    val_cache_path = os.path.join(os.path.dirname(os.path.abspath(args.valid_path)), "encoded_val.json")
+
+    if os.path.exists(train_cache_path):
+        with open(train_cache_path, "r") as f:
+            tokenized_train = json.load(f)
+        print(f"Loaded cached train encodings from {train_cache_path}")
+    else:
+        tokenized_train = [bpe_tokenizer.encode(text) for text in train_texts]
+        with open(train_cache_path, "w") as f:
+            json.dump(tokenized_train, f)
+        print(f"Saved train encodings to {train_cache_path}")
+
+    if os.path.exists(val_cache_path):
+        with open(val_cache_path, "r") as f:
+            tokenized_val = json.load(f)
+        print(f"Loaded cached valid encodings from {val_cache_path}")
+    else:
+        tokenized_val = [bpe_tokenizer.encode(text) for text in val_texts]
+        with open(val_cache_path, "w") as f:
+            json.dump(tokenized_val, f)
+        print(f"Saved valid encodings to {val_cache_path}")
+
     print("tokenized data in", time.time() - start_time, "seconds")
     config = {                              #directly setting from case 2 in data of parta
                 "d_model": 256,
                 "n_heads": 8,
                 "d_head": 32,
-                "n_layers": 6,
+                "n_layers": 4,
                 "vocab_size": bpe_tokenizer.get_vocab_size(),
-                "mode": "tanh-clipped",
+                "mode": "standard",
                 "tau": 1.5,
-                "batch_size": 128,
+                "batch_size": 32,
                 "lr": 1e-4
             }
     model = LanguageModel(config)
@@ -152,7 +178,7 @@ def main(args):
 
     if device.type == "mps":
         # Attention is memory-heavy on MPS; keep batch conservative to avoid OOM.
-        config["batch_size"] = min(config["batch_size"], 8)
+        config["batch_size"] = min(config["batch_size"], 32)
 
     model = model.to(device)
     print(f"Using device: {device}")
@@ -164,12 +190,30 @@ def main(args):
     l = [[len(x) for x in batched_tok_train[0][1]]]
     print(*l)
     print(f"batch size = {config['batch_size']}, number of batches in train = {len(batched_tok_train)}, number of batches in val = {len(batched_tok_val)}")
-    for epoch in range(10):
+    max_train_seconds = 5 * 60 * 60
+    epoch0_start_time = None
+    best_val_bpc = float("inf")
+
+    for epoch in range(80):
+        current_epoch_start = time.time()
+        if epoch0_start_time is None:
+            epoch0_start_time = current_epoch_start
+        elif current_epoch_start - epoch0_start_time >= max_train_seconds:
+            break
+
         print("--------------Epoch:", epoch, "--------------")
         train_loop(model, batched_tok_train, loss_fn, optimizer)
-        val_loop(model, batched_tok_val, loss_fn)
-    #save the model
-    os.makedirs(args.output_model_path, exist_ok=True)
+        _, val_bpc = val_loop(model, batched_tok_val, loss_fn)
+        #save the model
+        os.makedirs(args.output_model_path, exist_ok=True)
+        torch.save(model.state_dict(), args.output_model_path + "/model" + str(epoch) + ".pt")
+
+        if val_bpc < best_val_bpc:
+            best_val_bpc = val_bpc
+        elif epoch > 20:
+            print("Stopping training: Validation BPC did not improve this epoch.")
+            break
+
     torch.save(model.state_dict(), args.output_model_path + "/model.pt")
 
 if __name__ == '__main__':
