@@ -83,6 +83,7 @@ def train_loop(model, batched_tok_train, loss_fn, optim):
         loss = loss_fn(shifted_logits.reshape(-1, shifted_logits.shape[-1]), shifted_targets.reshape(-1))
         optim.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optim.step()
         if (batch+1)%40 == 0:
             bpc = calc_bpc(output_logits, collated_input['input_ids'], collated_input['attention_mask'], bpe_tokenizer)
@@ -156,9 +157,9 @@ def main(args):
 
     print("tokenized data in", time.time() - start_time, "seconds")
     config = {                              #directly setting from case 2 in data of parta
-                "d_model": 256,
+                "d_model": 400,
                 "n_heads": 8,
-                "d_head": 32,
+                "d_head": 50,
                 "n_layers": 4,
                 "vocab_size": bpe_tokenizer.get_vocab_size(),
                 "mode": "standard",
@@ -185,6 +186,11 @@ def main(args):
     print("initialized model in", time.time() - start_time, "seconds")
     loss_fn = torch.nn.CrossEntropyLoss(ignore_index=0)
     optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"])
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=80,
+        eta_min=config["lr"] * 0.1,
+    )
     batched_tok_train = batch_input(tokenized_train, config["batch_size"])
     batched_tok_val = batch_input(tokenized_val, config["batch_size"])
     l = [[len(x) for x in batched_tok_train[0][1]]]
@@ -202,11 +208,14 @@ def main(args):
             break
 
         print("--------------Epoch:", epoch, "--------------")
+        current_lr = optimizer.param_groups[0]["lr"]
+        print(f"Learning rate: {current_lr:.8f}")
         train_loop(model, batched_tok_train, loss_fn, optimizer)
         _, val_bpc = val_loop(model, batched_tok_val, loss_fn)
+        scheduler.step()
         #save the model
         os.makedirs(args.output_model_path, exist_ok=True)
-        torch.save(model.state_dict(), args.output_model_path + "/model" + str(epoch) + ".pt")
+        torch.save(model.state_dict(), args.output_model_path + "/model" + ".pt")
 
         if val_bpc < best_val_bpc:
             best_val_bpc = val_bpc

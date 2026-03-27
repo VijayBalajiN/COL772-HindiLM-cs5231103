@@ -15,9 +15,9 @@ def load_model_and_tokenizer(model_path, tokenizer_path):
     tokenizer.load(tokenizer_path)
     config = {
         "vocab_size": tokenizer.get_vocab_size(),
-        "d_model": 256,
+        "d_model": 400,
         "n_heads": 8,
-        "d_head": 32,
+        "d_head": 50,
         "n_layers": 4,
         "mode": "standard",
         "tau": 1.5,
@@ -26,7 +26,7 @@ def load_model_and_tokenizer(model_path, tokenizer_path):
     }
     model = LanguageModel(config)
     model.set_weights_randomly()
-    model.load_state_dict(torch.load(os.path.join(model_path, "model9.pt")))
+    model.load_state_dict(torch.load(os.path.join(model_path, "model.pt")))
     device = "cpu"
     if torch.cuda.is_available():
         device = torch.device("cuda")

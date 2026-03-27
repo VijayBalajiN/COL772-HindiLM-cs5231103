@@ -49,7 +49,7 @@ class DLinkedList:
             
 
 class BPETokenizer:
-    def __init__(self, vocab_size=15000, special_tokens=None):
+    def __init__(self, vocab_size=10000, special_tokens=None):
         # raise NotImplementedError("BPETokenizer initialization not implemented yet.")
         self.vocab_size = vocab_size
         self.unk_id = None #set it in train
